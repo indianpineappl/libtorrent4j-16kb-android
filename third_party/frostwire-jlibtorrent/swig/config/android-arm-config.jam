@@ -1,0 +1,26 @@
+import os ;
+
+ANDROID_TOOLCHAIN_BIN = [ os.environ ANDROID_TOOLCHAIN_BIN ] ;
+ANDROID_API = [ os.environ android_api ] ;
+
+using clang-linux : arm : $(ANDROID_TOOLCHAIN_BIN)/armv7a-linux-androideabi$(ANDROID_API)-clang++ :
+    <cxxflags>-fPIC
+    <cxxflags>-march=armv7-a
+    <cxxflags>-mfpu=neon
+    <cxxflags>-std=c++14
+    <cxxflags>-DANDROID
+    <cxxflags>-D__STDC_FORMAT_MACROS
+    <cxxflags>-D_FILE_OFFSET_BITS=64
+    <cxxflags>-Dfseeko=fseek
+    <cxxflags>-Dftello=ftell
+    <cxxflags>-fno-strict-aliasing
+    <cxxflags>-fvisibility=hidden
+    <linkflags>-static-libstdc++
+    <linkflags>"-Wl,-z,max-page-size=16384"
+    <linkflags>"-Wl,-z,common-page-size=16384"
+    # debug information
+    <cxxflags>-g
+    <cxxflags>-gdwarf-4
+    <cxxflags>-fdebug-macro
+    <cxxflags>-ggdb
+    ;

@@ -13,6 +13,20 @@ Thumbs.db
 *.log
 *.jar.tmp
 
+# Local release artifacts
+*.zip
+release-*/
+
+# Local helper scripts/docs (optional)
+QUICK_PUSH.sh
+push-to-github.sh
+create-release-package.sh
+GITHUB_SETUP.md
+
+# Vendored third_party build outputs
+third_party/**/swig/bin/
+third_party/**/bin/
+
 # IDE files
 .idea/
 *.iml

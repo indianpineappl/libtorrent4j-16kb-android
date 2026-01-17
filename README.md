@@ -2,7 +2,7 @@
 
 **16KB Page Size Compliant libtorrent4j for Android**
 
-Pre-built libtorrent4j native libraries compiled with 16KB page size alignment for Google Play Store compliance (Android 15+ requirement starting November 1, 2025).
+Vendored FrostWire **jlibtorrent** sources + build scripts to produce **16KB page-size aligned** Android native libraries for Google Play Store compliance (Android 15+ requirement starting November 1, 2025).
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -18,18 +18,20 @@ The standard libtorrent4j libraries available on Maven/JitPack are compiled with
 
 ## ✅ Solution
 
-This repository provides **pre-built libtorrent4j libraries** compiled with `-Wl,-z,max-page-size=16384` linker flags, ensuring 16KB page alignment for all Android architectures.
+This repository provides a build setup that compiles libtorrent/jlibtorrent with 16KB alignment using linker flags:
+
+- `-Wl,-z,max-page-size=16384`
+- `-Wl,-z,common-page-size=16384`
 
 ## 📦 What's Included
 
-- **libtorrent4j-android-arm64-v8a-16kb.jar** (6.0 MB) - ARM 64-bit
-- **libtorrent4j-android-armeabi-v7a-16kb.jar** (5.2 MB) - ARM 32-bit
-- **libtorrent4j-android-x86_64-16kb.jar** (5.8 MB) - x86 64-bit
-- **libtorrent4j-android-x86-16kb.jar** (5.9 MB) - x86 32-bit
-- **libtorrent4j-2.1.0-38.jar** (812 KB) - Java wrapper classes
+- **Vendored FrostWire jlibtorrent sources** under `third_party/frostwire-jlibtorrent/`
+- **Android build scripts** under `third_party/frostwire-jlibtorrent/swig/`
+  - `build-android-arm64.sh`
+  - `build-android-arm.sh`
+  - (x86 scripts exist but are not required for most apps)
 
-**Based on:** libtorrent4j 2.1.0-38  
-**Built with:** Android NDK r26, 16KB ELF alignment
+**Built with:** Android NDK r29 (unified LLVM toolchain), 16KB ELF alignment
 
 ## 🚀 Usage
 
@@ -144,34 +146,23 @@ readelf -l libtorrent4j.so | grep LOAD
 
 ## 🛠️ Building from Source
 
-If you want to build the libraries yourself:
+If you want to build the 16KB-aligned native libraries yourself:
 
-1. **Clone libtorrent4j:**
+1. **Build arm64-v8a:**
    ```bash
-   git clone https://github.com/aldenml/libtorrent4j.git
-   cd libtorrent4j
-   git submodule update --init --recursive
+   cd third_party/frostwire-jlibtorrent/swig
+   NON_INTERACTIVE=1 bash ./build-android-arm64.sh
    ```
 
-2. **Apply 16KB alignment patches:**
-   
-   Edit `swig/config/android-arm64-config.jam` (and other arch configs):
-   ```jam
-   <linkflags>-Wl,-z,max-page-size=16384
-   ```
-
-3. **Build with Docker:**
+2. **Build armeabi-v7a:**
    ```bash
-   cd swig/android-build
-   docker build -t lt4j:latest .
-   ./build-arm64.sh
-   ./build-arm.sh
-   ./build-x86_64.sh
-   ./build-x86.sh
+   cd third_party/frostwire-jlibtorrent/swig
+   NON_INTERACTIVE=1 bash ./build-android-arm.sh
    ```
 
-4. **Package JARs:**
-   See `build-scripts/package-jars.sh` in this repo
+3. **Outputs:**
+   - The build script copies the resulting `libjlibtorrent.so` to:
+     - `third_party/frostwire-jlibtorrent/libjlibtorrent.so`
 
 ## 📋 Requirements
 

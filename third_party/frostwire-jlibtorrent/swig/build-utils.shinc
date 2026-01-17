@@ -1,0 +1,357 @@
+#!/usr/bin/env bash
+
+LIBRARY_VERSION=`cat ../build.gradle | grep "version '" | awk '{ print $2 }' | sed "s/'//g"`
+LIBRARY_NAME=jlibtorrent
+LIBTORRENT_REVISION=0f337b9ce7a1b0fc87f48843933b1c5c4dd5a9ec #bump to version 1.2.5  (branch:RC_1_2) (tag:none)
+OPENSSL_VERSION="1.1.1d"
+BOOST_VERSION="72"
+BOOST_MAJOR="1"
+BOOST_MINOR="0"
+SWIG=`pwd`
+SRC="${HOME}/src"
+BOOST_ROOT="${SRC}/boost_${BOOST_MAJOR}_${BOOST_VERSION}_${BOOST_MINOR}"
+LIBTORRENT_ROOT="${SRC}/libtorrent"
+OPENSSL_SOURCE="${SRC}/openssl-${OPENSSL_VERSION}"
+OPENSSL_ROOT="${SRC}/openssl"
+OPENSSL_NO_OPTS="no-afalgeng no-async no-autoalginit no-autoerrinit no-capieng no-cms no-comp no-deprecated no-dgram no-dso no-dtls no-dynamic-engine no-egd no-engine no-err no-filenames no-gost no-hw no-makedepend no-multiblock no-nextprotoneg no-posix-io no-psk no-rdrand no-sctp no-shared no-sock no-srp no-srtp no-static-engine no-stdio no-threads no-ui-console no-zlib no-zlib-dynamic -fno-strict-aliasing -fvisibility=hidden -Os"
+
+prompt_msg() {
+ echo
+ echo "============================================================================="
+ echo $1
+ echo "============================================================================="
+ echo
+}
+
+press_any_to_continue() {
+ if [[ "${NON_INTERACTIVE}" == "1" ]]; then
+   return 0
+ fi
+ echo "[Press any key to continue]"
+ read -n 1 -s -r -p ""
+}
+
+create_folder_if_it_doesnt_exist() {
+ if [[ ! -d $1 ]]; then mkdir -p $1; fi;
+}
+
+abort_if_var_unset() {
+  var_name=${1}
+  var_value=${2}
+  if [[ ! -n ${var_value} ]]; then
+    prompt_msg "Error ${var_name} not set. Aborting"
+    exit 1
+  fi
+  echo ${var_name} set to ${var_value}
+}
+
+check_min_req_vars() {
+  abort_if_var_unset "LIBTORRENT_REVISION" ${LIBTORRENT_REVISION}
+  abort_if_var_unset "LIBRARY_VERSION" ${LIBRARY_VERSION}
+  abort_if_var_unset "LIBRARY_NAME" ${LIBRARY_NAME}
+  abort_if_var_unset "OPENSSL_VERSION" ${OPENSSL_VERSION}
+  abort_if_var_unset "BOOST_VERSION" ${BOOST_VERSION}
+  abort_if_var_unset "BOOST_MAJOR" ${BOOST_MAJOR}
+  abort_if_var_unset "BOOST_MINOR" ${BOOST_MINOR}
+  abort_if_var_unset "SWIG" ${SWIG}
+  abort_if_var_unset "SRC" ${SRC}
+  abort_if_var_unset "BOOST_ROOT" ${BOOST_ROOT}
+  abort_if_var_unset "LIBTORRENT_ROOT" ${LIBTORRENT_ROOT}
+  abort_if_var_unset "OPENSSL_SOURCE" ${OPENSSL_SOURCE}
+  abort_if_var_unset "OPENSSL_ROOT" ${OPENSSL_ROOT}
+  abort_if_var_unset "OPENSSL_NO_OPTS" ${OPENSSL_NO_OPTS}
+}
+
+prepare_boost() {
+  abort_if_var_unset "BOOST_ROOT" ${BOOST_ROOT}
+  abort_if_var_unset "BOOST_VERSION" ${BOOST_VERSION}
+  abort_if_var_unset "BOOST_MAJOR" ${BOOST_MAJOR}
+  abort_if_var_unset "BOOST_MINOR" ${BOOST_MINOR}
+
+  if ! [ -x "$(command -v wget)" ]; then
+      echo "Error: wget is not installed."
+      exit 1
+  fi
+  
+  pushd ${SRC}
+  echo "Checking for ${BOOST_ROOT}..."
+  if [ ! -d ${BOOST_ROOT} ]; then
+    prompt_msg "Downloading BOOST ${BOOST_MAJOR}_${BOOST_VERSION}_${BOOST_MINOR}"
+    BOOST_ZIP="boost_${BOOST_MAJOR}_${BOOST_VERSION}_${BOOST_MINOR}.zip"
+    # Use the Boost archival mirror (JFrog redirects to a landing page in some environments).
+    BOOST_URL="https://archives.boost.io/release/${BOOST_MAJOR}.${BOOST_VERSION}.${BOOST_MINOR}/source/${BOOST_ZIP}"
+    wget -O "${BOOST_ZIP}" "${BOOST_URL}"
+    unzip -qq "${BOOST_ZIP}"
+    rm -f "${BOOST_ZIP}"
+  fi
+  pushd ${BOOST_ROOT}
+  pwd
+  # Build Boost.Build engine (b2) locally. Do not pass --with-bjam (that expects an existing bjam).
+  ./bootstrap.sh
+  if [[ ! -x "./b2" ]]; then
+    prompt_msg "ERROR: Boost bootstrap did not generate ./b2 at ${BOOST_ROOT}"
+    ls -la
+    exit 1
+  fi
+  popd
+  popd
+}
+
+prepare_android_toolchain() {
+  abort_if_var_unset "SRC" ${SRC}
+  abort_if_var_unset "os_arch" ${os_arch}
+  abort_if_var_unset "android_api" ${android_api}
+  # Modern NDKs (r23+) removed make_standalone_toolchain.py.
+  # Use the unified LLVM toolchain from an installed NDK.
+  # Expect ANDROID_NDK_HOME to be set externally; otherwise, fall back to a common macOS SDK path.
+  if [[ -z "${ANDROID_NDK_HOME}" ]]; then
+    ANDROID_NDK_HOME="/Users/ab/Library/Android/sdk/ndk/29.0.14206865"
+  fi
+  abort_if_var_unset "ANDROID_NDK_HOME" ${ANDROID_NDK_HOME}
+
+  ANDROID_TOOLCHAIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/darwin-x86_64"
+  ANDROID_TOOLCHAIN_BIN="${ANDROID_TOOLCHAIN}/bin"
+  export ANDROID_TOOLCHAIN
+  export ANDROID_TOOLCHAIN_BIN
+
+  # OpenSSL 1.1.1d's Android Configure expects either an old NDK with "platforms/" or an
+  # NDK/standalone layout with AndroidVersion.txt + sysroot under $ANDROID_NDK_HOME.
+  # Modern NDKs keep sysroot under the toolchain path, so provide a compatibility symlink.
+  if [[ -d "${ANDROID_NDK_HOME}" && ! -f "${ANDROID_NDK_HOME}/AndroidVersion.txt" ]]; then
+    echo "29" > "${ANDROID_NDK_HOME}/AndroidVersion.txt"
+  fi
+  if [[ -d "${ANDROID_TOOLCHAIN}/sysroot" && ! -e "${ANDROID_NDK_HOME}/sysroot" ]]; then
+    ln -s "${ANDROID_TOOLCHAIN}/sysroot" "${ANDROID_NDK_HOME}/sysroot"
+  fi
+
+  # If a build points OpenSSL's ANDROID_NDK_HOME to the toolchain directory (standalone-toolchain mode),
+  # provide the same compatibility files there.
+  if [[ -d "${ANDROID_TOOLCHAIN}" && ! -f "${ANDROID_TOOLCHAIN}/AndroidVersion.txt" ]]; then
+    echo "29" > "${ANDROID_TOOLCHAIN}/AndroidVersion.txt"
+  fi
+  if [[ -d "${ANDROID_TOOLCHAIN}/sysroot" && ! -e "${ANDROID_TOOLCHAIN}/sysroot" ]]; then
+    # (should already exist) keep for symmetry.
+    true
+  fi
+
+  # OpenSSL 1.1.1d (standalone toolchain path) looks for unsuffixed compiler names like
+  # aarch64-linux-android-clang, but modern NDKs ship API-suffixed binaries like
+  # aarch64-linux-android21-clang. Provide symlinks for the current arch+api.
+  local _triple=""
+  if [[ "${os_arch}" == "arm64" ]]; then
+    _triple="aarch64-linux-android"
+  elif [[ "${os_arch}" == "arm" ]]; then
+    _triple="armv7a-linux-androideabi"
+  elif [[ "${os_arch}" == "x86" ]]; then
+    _triple="i686-linux-android"
+  elif [[ "${os_arch}" == "x86_64" ]]; then
+    _triple="x86_64-linux-android"
+  fi
+  if [[ -n "${_triple}" ]]; then
+    local _cc_api="${ANDROID_TOOLCHAIN_BIN}/${_triple}${android_api}-clang"
+    local _cxx_api="${ANDROID_TOOLCHAIN_BIN}/${_triple}${android_api}-clang++"
+    local _cc_uns="${ANDROID_TOOLCHAIN_BIN}/${_triple}-clang"
+    local _cxx_uns="${ANDROID_TOOLCHAIN_BIN}/${_triple}-clang++"
+    local _ar_pref="${ANDROID_TOOLCHAIN_BIN}/${_triple}-llvm-ar"
+    local _ranlib_pref="${ANDROID_TOOLCHAIN_BIN}/${_triple}-llvm-ranlib"
+    local _ar="${ANDROID_TOOLCHAIN_BIN}/llvm-ar"
+    local _ranlib="${ANDROID_TOOLCHAIN_BIN}/llvm-ranlib"
+    if [[ -x "${_cc_api}" && ! -e "${_cc_uns}" ]]; then
+      ln -s "${_cc_api}" "${_cc_uns}"
+    fi
+    if [[ -x "${_cxx_api}" && ! -e "${_cxx_uns}" ]]; then
+      ln -s "${_cxx_api}" "${_cxx_uns}"
+    fi
+
+    # OpenSSL's android-arm target historically looks for arm-linux-androideabi-clang on PATH.
+    # Modern NDKs use armv7a-linux-androideabi<API>-clang, so provide that legacy name too.
+    if [[ "${os_arch}" == "arm" ]]; then
+      local _legacy_triple="arm-linux-androideabi"
+      local _legacy_cc="${ANDROID_TOOLCHAIN_BIN}/${_legacy_triple}-clang"
+      local _legacy_cxx="${ANDROID_TOOLCHAIN_BIN}/${_legacy_triple}-clang++"
+      local _legacy_ar="${ANDROID_TOOLCHAIN_BIN}/${_legacy_triple}-llvm-ar"
+      local _legacy_ranlib="${ANDROID_TOOLCHAIN_BIN}/${_legacy_triple}-llvm-ranlib"
+      if [[ -x "${_cc_api}" && ! -e "${_legacy_cc}" ]]; then
+        ln -s "${_cc_api}" "${_legacy_cc}"
+      fi
+      if [[ -x "${_cxx_api}" && ! -e "${_legacy_cxx}" ]]; then
+        ln -s "${_cxx_api}" "${_legacy_cxx}"
+      fi
+      if [[ -x "${_ar}" && ! -e "${_legacy_ar}" ]]; then
+        ln -s "${_ar}" "${_legacy_ar}"
+      fi
+      if [[ -x "${_ranlib}" && ! -e "${_legacy_ranlib}" ]]; then
+        ln -s "${_ranlib}" "${_legacy_ranlib}"
+      fi
+    fi
+    if [[ -x "${_ar}" && ! -e "${_ar_pref}" ]]; then
+      ln -s "${_ar}" "${_ar_pref}"
+    fi
+    if [[ -x "${_ranlib}" && ! -e "${_ranlib_pref}" ]]; then
+      ln -s "${_ranlib}" "${_ranlib_pref}"
+    fi
+  fi
+
+  prompt_msg "ANDROID_NDK_HOME=${ANDROID_NDK_HOME}"
+  prompt_msg "ANDROID_TOOLCHAIN=${ANDROID_TOOLCHAIN}"
+  prompt_msg "ANDROID_TOOLCHAIN_BIN=${ANDROID_TOOLCHAIN_BIN}"
+}
+
+prepare_linux_toolchain() {
+  #sudo add-apt-repository ppa:ubuntu-toolchain-r/test -y
+  #sudo apt-get update -qq
+  #sudo apt-get install -qq g++-5
+  echo "...skipping prepare_linux_toolchain"
+}
+
+prepare_openssl() {
+  abort_if_var_unset "SRC" ${SRC}
+  abort_if_var_unset "OPENSSL_VERSION" ${OPENSSL_VERSION}
+  abort_if_var_unset "OPENSSL_SOURCE" ${OPENSSL_SOURCE}
+  if [ ! -d ${OPENSSL_SOURCE} ]; then
+    prompt_msg "Downloading OPENSSL ${OPENSSL_VERSION} to '{$OPENSSL_SOURCE}'"
+    pushd ${SRC}
+    wget -O openssl.tar.gz https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
+    tar xvfz openssl.tar.gz
+    rm -f openssl.tar.gz
+    popd
+  fi
+}
+
+build_openssl() {
+  abort_if_var_unset "OPENSSL_SOURCE" ${OPENSSL_SOURCE}
+  abort_if_var_unset "run_openssl_configure" ${run_openssl_configure}
+  if [ -d ${OPENSSL_ROOT} ]; then
+    rm -fr ${OPENSSL_ROOT}
+  fi
+  if [ -d ${OPENSSL_SOURCE} ]; then
+    pushd ${OPENSSL_SOURCE}
+    # Ensure the Android toolchain binaries (clang/llvm-ar/llvm-ranlib) are available for the whole build.
+    if [[ -n "${ANDROID_TOOLCHAIN_BIN}" ]]; then
+      export PATH="${ANDROID_TOOLCHAIN_BIN}:${PATH}"
+    fi
+    # OpenSSL's generated Makefile may reference ANDROID_NDK_ROOT/ANDROID_NDK_HOME at make-time.
+    # If we only set them for the Configure invocation, they can expand to empty during make,
+    # yielding invalid paths like /toolchains/... and --sysroot=/sysroot.
+    if [[ -n "${OPENSSL_ANDROID_NDK_ROOT}" ]]; then
+      export ANDROID_NDK_HOME="${OPENSSL_ANDROID_NDK_ROOT}"
+      export ANDROID_NDK_ROOT="${OPENSSL_ANDROID_NDK_ROOT}"
+    elif [[ -n "${ANDROID_NDK_HOME}" ]]; then
+      export ANDROID_NDK_HOME="${ANDROID_NDK_HOME}"
+      export ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
+    fi
+    make clean || true
+    make distclean || true
+    eval "${run_openssl_configure}"
+    make -j 8
+    make install_sw
+    if [[ ! -f "${OPENSSL_ROOT}/include/openssl/opensslv.h" ]]; then
+      echo "OpenSSL headers not installed to ${OPENSSL_ROOT}/include; aborting."
+      exit 1
+    fi
+    popd
+  fi
+}
+
+prepare_libtorrent() {
+  abort_if_var_unset "SRC" ${SRC}
+  abort_if_var_unset "LIBTORRENT_ROOT" ${LIBTORRENT_ROOT}
+  abort_if_var_unset "LIBTORRENT_REVISION" ${LIBTORRENT_REVISION}
+  if [ ! -d ${LIBTORRENT_ROOT} ]; then
+    pushd ${SRC}
+    git clone https://github.com/arvidn/libtorrent
+    popd
+  fi 
+  pushd ${LIBTORRENT_ROOT}
+  prompt_msg "Checking if you have any uncommited changes"
+  git status
+  prompt_msg "Abort with Ctrl-C if there's pending changes above or you will lose them"
+  press_any_to_continue
+  git fetch origin RC_1_2
+  git checkout ${LIBTORRENT_REVISION}
+  git submodule init
+  git submodule update
+  make clean
+  popd
+}
+
+build_libraries() {
+  abort_if_var_unset "OPENSSL_ROOT" ${OPENSSL_ROOT}
+  abort_if_var_unset "SWIG" ${SWIG}
+  abort_if_var_unset "os_build" ${os_build}
+  abort_if_var_unset "os_arch" ${os_arch}
+  abort_if_var_unset "SHARED_LIB" ${SHARED_LIB}
+  abort_if_var_unset "SHARED_LIB_FINAL" ${SHARED_LIB_FINAL}
+  abort_if_var_unset "run_bjam" ${run_bjam}
+  abort_if_var_unset "run_objcopy" ${run_objcopy}
+  abort_if_var_unset "run_strip" ${run_strip}
+  abort_if_var_unset "run_readelf" ${run_readelf}
+  set -x
+  cd ${SWIG}
+  export PATH=${PATH}:${BOOST_ROOT}/tools/build/src/engine
+  echo "Added boost tools to PATH:"
+  echo ${PATH}
+  # Ensure Boost.Build can locate boost-build.jam when invoked from outside the Boost tree.
+  export BOOST_ROOT=${BOOST_ROOT}
+  export BOOST_BUILD_PATH=${BOOST_ROOT}/tools/build
+  if [[ -x "${BOOST_ROOT}/b2" ]]; then
+    export BOOST_BJAM_BIN="${BOOST_ROOT}/b2"
+  elif [[ -x "${BOOST_ROOT}/bjam" ]]; then
+    export BOOST_BJAM_BIN="${BOOST_ROOT}/bjam"
+  else
+    export BOOST_BJAM_BIN="${BOOST_ROOT}/b2"
+  fi
+  echo "Using BOOST_BJAM_BIN=${BOOST_BJAM_BIN}"
+  export OPENSSL_ROOT=${OPENSSL_ROOT}
+  export LIBTORRENT_ROOT=${LIBTORRENT_ROOT}
+  # run_bjam may already be expanded to an absolute path (e.g. /.../boost_*/b2).
+  # Replace the *first* argv (the b2/BJAM executable path) with the detected one.
+  _run_bjam_resolved="$(echo "${run_bjam}" | sed -E "s|^[^ ]+|${BOOST_BJAM_BIN}|")"
+  eval "${_run_bjam_resolved}"
+  $run_objcopy
+  $run_strip
+  if [[ $os_build == "windows" ]]; then
+    # expected but parametrized for flexibility and project
+    # SHARED_LIB = lib${LIBRARY_NAME}.dll, libtorrent4j.dll
+    # SHARED_LIB_FINAL = ${LIBRARY_NAME}.dll, torrent4j.dll
+    mv bin/release/windows/${os_arch}/${SHARED_LIB} bin/release/windows/${os_arch}/${SHARED_LIB_FINAL};
+  fi
+  cd ..
+  if [[ $os_build == "macosx" || $os_build == "linux" ]]; then
+    cp swig/bin/release/${os_build}/${os_arch}/${SHARED_LIB} .
+  fi
+  if [[ $os_build == "android" && $os_arch == "arm" ]]; then
+    cp swig/bin/release/${os_build}/${os_arch}eabi-v7a/${SHARED_LIB} .
+  fi
+  # TODO: the copying of android-x86 library
+  # Prefer the project Gradle wrapper if present. If not available, skip packaging.
+  if [[ -x "../gradlew" ]]; then
+    ../gradlew clean
+    ../gradlew build
+  elif [[ -x "./gradlew" ]]; then
+    ./gradlew clean
+    ./gradlew build
+  elif command -v gradle >/dev/null 2>&1; then
+    gradle clean
+    gradle build
+  else
+    echo "Gradle not found; skipping JAR packaging step (native .so build may still be usable)."
+  fi
+}
+
+cleanup_objects() {
+  abort_if_var_unset "SWIG" ${SWIG}
+  # cleanup (when it's finally working, enable this)
+  if [ -d ${SWIG}/bin ]; then
+    cd ${SWIG}/bin
+    find . -type f | egrep -v '.*\.so$|.*\.dll$|.*\.dylib$|.*\.debug$' | xargs rm
+    find . -empty -type d | xargs rm -r
+  else
+    echo ${SWIG}/bin folder not found, nothing to clean  
+  fi
+  cd ${SWIG}
+  cd ..
+  find . -type f | egrep '\d.\d.\d.\d\d.jar$'
+  cd ${SWIG}
+}
+
